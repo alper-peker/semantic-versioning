@@ -1,9 +1,3 @@
-# import-labels.ps1
-# Sync labels to the current GitHub repo from labels.json:
-# - create/update labels that exist in JSON
-# - then delete labels that are NOT in JSON
-# Requires: gh (logged in), PowerShell 5+ or 7+
-
 param(
     [switch]$PreviewOnly
 )
@@ -16,7 +10,8 @@ function Normalize([string]$s) {
 }
 
 # 1) read desired labels
-$labelsPath = Join-Path (Get-Location) "labels.json"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$labelsPath = Join-Path $scriptDir "labels.json"
 if (!(Test-Path $labelsPath)) {
     Write-Host "labels.json not found at $labelsPath"
     exit 1
