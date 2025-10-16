@@ -1,0 +1,20 @@
+[
+  { "name": "breaking-change", "color": "d73a4a", "description": "Introduces backward incompatible changes - MAJOR version bump." },
+  { "name": "feature",          "color": "0e8a16", "description": "Adds a new feature or capability - MINOR version bump." },
+  { "name": "fix",              "color": "d73a4a", "description": "Fixes a bug without changing public behavior - PATCH version bump." },
+  { "name": "security",         "color": "b60205", "description": "Addresses a security issue or hardening - PATCH or MINOR depending on scope." },
+  { "name": "perf",             "color": "f9d0c4", "description": "Improves performance without behavior change - PATCH version bump." },
+  { "name": "refactor",         "color": "c2e0c6", "description": "Code structure change without behavior change - PATCH version bump." },
+  { "name": "docs",             "color": "0366d6", "description": "Documentation updates or improvements - PATCH version bump." },
+  { "name": "test",             "color": "e4e669", "description": "Adds or updates tests without affecting production code - PATCH version bump." },
+  { "name": "build",            "color": "5319e7", "description": "Changes to the build system or tooling - PATCH version bump." },
+  { "name": "ci",               "color": "0052cc", "description": "Continuous integration or deployment workflow changes - PATCH version bump." },
+  { "name": "deps",             "color": "1d76db", "description": "Dependency updates or upgrades - PATCH or MAJOR depending on compatibility." },
+  { "name": "revert",           "color": "eeeeee", "description": "Reverts a previous change - PATCH version bump." },
+
+  { "name": "duplicate",        "color": "cccccc", "description": "This issue or pull request already exists - management only." },
+  { "name": "good first issue", "color": "7057ff", "description": "Good entry level issue for new contributors - management only." },
+  { "name": "help wanted",      "color": "008672", "description": "Extra attention or contribution is needed - management only." },
+  { "name": "question",         "color": "d876e3", "description": "Further information is requested - management only." },
+  { "name": "wontfix",          "color": "ffffff", "description": "This will not be worked on - management only." }
+]
