@@ -1,0 +1,43 @@
+name: Require PR Label
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review, labeled, unlabeled]
+
+jobs:
+  check-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SemVer Label Check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const names = labels.map(l => l.name);
+
+            const semverLabels = [
+              "breaking-change",                                  // MAJOR
+              "feature",                                          // MINOR
+              "fix", "perf", "refactor", "docs",
+              "test", "build", "ci", "deps", "revert", "security" // PATCH
+            ];
+
+            const found = names.filter(name => semverLabels.includes(name));
+
+            if (found.length === 0) {
+              core.setFailed(
+                "A SemVer label is required for pull requests. " +
+                "Please add one of the labels below to continue:\n" +
+                semverLabels.join(", ")
+              );
+            } else {
+              core.info(`PR SemVer Label(s): ${found.join(", ")}`);
+            }
