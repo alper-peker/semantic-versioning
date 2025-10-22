@@ -6,4 +6,5 @@ Tag Requests:
  .
  .
  .
- X. Race-condition with another branch: TESTING...
+ X. Race-condition with another branch: SUCCEED!
+ x.1 MINOR SHOWCASE
