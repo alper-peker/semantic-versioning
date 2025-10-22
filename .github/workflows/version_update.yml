@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   version_tag:
-    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.run_attempt == 1
     runs-on: ubuntu-latest
 
     steps:
