@@ -1,0 +1,90 @@
+name: Version Update on Merge
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: bump-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version_tag:
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide Version Bump
+        id: bump
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = (context.payload.pull_request.labels || []).map(l => l.name)
+
+            const isMajor = labels.includes("breaking-change")
+            const isMinor = labels.includes("feature")
+            const patchSet = ["fix","perf","refactor","docs","test","build","ci","deps","revert","security"]
+            const isPatch = labels.some(l => patchSet.includes(l))
+
+            let bump = ""
+            if (isMajor) bump = "major"
+            else if (isMinor) bump = "minor"
+            else if (isPatch) bump = "patch"
+
+            core.setOutput("bump", bump)
+
+      - name: Compute Next Version
+        id: version
+        if: steps.bump.outputs.bump != ''
+        run: |
+          set -euo pipefail
+
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Last tag: $LAST_TAG"
+
+          VER="${LAST_TAG#v}"
+          IFS='.' read -r MA MI PA <<< "$VER"
+
+          case "${{ steps.bump.outputs.bump }}" in
+            major) MA=$((MA+1)); MI=0; PA=0 ;;
+            minor) MI=$((MI+1)); PA=0 ;;
+            patch) PA=$((PA+1)) ;;
+          esac
+
+          NEXT="v${MA}.${MI}.${PA}"
+          echo "Next version: $NEXT"
+
+          if git rev-parse -q --verify "refs/tags/$NEXT" >/dev/null; then
+            echo "next=$NEXT" >> $GITHUB_OUTPUT
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "next=$NEXT" >> $GITHUB_OUTPUT
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push tag
+        if: steps.version.outputs.next != '' && steps.version.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+
+          git tag -a "${{ steps.version.outputs.next }}" -m "Release ${{ steps.version.outputs.next }} (via CI)"
+          git push origin "${{ steps.version.outputs.next }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # - name: Create GitHub Release
+      #   if: steps.version.outputs.next != '' && steps.version.outputs.exists == 'false'
+      #   run: gh release create "${{ steps.version.outputs.next }}" --generate-notes
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
