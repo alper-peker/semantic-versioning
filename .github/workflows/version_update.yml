@@ -1,4 +1,4 @@
-name: Version Update on Merge
+name: Component-aware SemVer Workflow
 
 on:
   pull_request:
@@ -9,82 +9,269 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: bump-${{ github.ref }}
+  group: semver-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  version_tag:
-    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.run_attempt == 1
+  tag_selection:
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.run_attempt == 1
     runs-on: ubuntu-latest
-
+    outputs:
+      changed: ${{ steps.detect.outputs.changed }}
+      base:    ${{ steps.range.outputs.base }}
+      head:    ${{ steps.range.outputs.head }}
     steps:
-      - name: Checkout
+      - name: Checkout (full history)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Decide Version Bump
-        id: bump
+      - name: Figure out PR range
+        id: range
+        run: |
+          echo "base=${{ github.event.pull_request.base.sha }}"  >> $GITHUB_OUTPUT
+          echo "head=${{ github.event.pull_request.merge_commit_sha }}" >> $GITHUB_OUTPUT
+
+      - name: Detect changed components
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --name-only "${{ steps.range.outputs.base }}".."${{ steps.range.outputs.head }}" > changed.txt || true
+
+          FRONT=$(grep -E '^src/front-end/' changed.txt || true)
+          BACK=$(grep -E '^src/back-end/'  changed.txt || true)
+
+          OUT=""
+          if [[ -n "${FRONT:-}" && -n "${BACK:-}" ]]; then
+            OUT="fendbend"
+          elif [[ -n "${FRONT:-}" ]]; then
+            OUT="fend"
+          elif [[ -n "${BACK:-}" ]]; then
+            OUT="bend"
+          fi
+
+          echo "changed=${OUT}" >> $GITHUB_OUTPUT
+          echo "Detected changed component(s): ${OUT:-none}"
+
+  bump_selection:
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.run_attempt == 1
+    runs-on: ubuntu-latest
+    needs: [tag_selection]
+    outputs:
+      level: ${{ steps.relabel.outputs.level }}
+    steps:
+      - name: Decide bump level from PR labels
+        id: relabel
         uses: actions/github-script@v7
         with:
           script: |
-            const labels = (context.payload.pull_request.labels || []).map(l => l.name)
+            const labels = (context.payload.pull_request.labels || []).map(l => (l.name || '').toLowerCase())
 
-            const isMajor = labels.includes("breaking-change")
-            const isMinor = labels.includes("feature")
-            const patchSet = ["fix","perf","refactor","docs","test","build","ci","deps","revert","security"]
-            const isPatch = labels.some(l => patchSet.includes(l))
+            const isMajor = labels.includes('breaking-change')
+            const isMinor = labels.includes('feature')
+            const patchSet = new Set(['fix','perf','refactor','docs','test','build','ci','deps','revert','security','chore'])
 
-            let bump = ""
-            if (isMajor) bump = "major"
-            else if (isMinor) bump = "minor"
-            else if (isPatch) bump = "patch"
+            let level = 'PATCH'
+            if (isMinor) level = 'MINOR'
+            if (isMajor) level = 'MAJOR'
+            else if (!isMinor) {
+              const anyPatchy = labels.some(l => patchSet.has(l))
+              level = anyPatchy ? 'PATCH' : 'PATCH'
+            }
 
-            core.setOutput("bump", bump)
+            core.info(`Bump level decided from labels: ${level}`)
+            core.setOutput('level', level)
 
-      - name: Compute Next Version
-        id: version
-        if: steps.bump.outputs.bump != ''
+  compute_versions:
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.run_attempt == 1
+    runs-on: ubuntu-latest
+    needs: [tag_selection, bump_selection]
+    outputs:
+      changed: ${{ steps.meta.outputs.changed }}
+      bump:    ${{ steps.meta.outputs.bump }}
+      frontend_next: ${{ steps.calc.outputs.frontend_next }}
+      backend_next:  ${{ steps.calc.outputs.backend_next }}
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Collect inputs
+        id: meta
+        run: |
+          echo "changed=${{ needs.tag_selection.outputs.changed }}" >> $GITHUB_OUTPUT
+          echo "bump=${{ needs.bump_selection.outputs.level }}"     >> $GITHUB_OUTPUT
+          echo "Inputs -> changed='${{ needs.tag_selection.outputs.changed }}', bump='${{ needs.bump_selection.outputs.level }}'"
+
+      - name: Compute next version(s)
+        id: calc
+        shell: bash
         run: |
           set -euo pipefail
+          CHANGED="${{ steps.meta.outputs.changed }}"
+          BUMP="${{ steps.meta.outputs.bump }}"   # MAJOR / MINOR / PATCH
 
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "Last tag: $LAST_TAG"
+          bump_one () {
+            local prefix="$1"
+            local pattern="${prefix}-v*"
 
-          VER="${LAST_TAG#v}"
-          IFS='.' read -r MA MI PA <<< "$VER"
+            local last tag cur ma mi pa
+            last="$(git tag --list "$pattern" --sort=-v:refname | head -n1)"
+            if [[ -z "$last" ]]; then
+              tag="${prefix}-v0.0.0"
+            else
+              tag="$last"
+            fi
 
-          case "${{ steps.bump.outputs.bump }}" in
-            major) MA=$((MA+1)); MI=0; PA=0 ;;
-            minor) MI=$((MI+1)); PA=0 ;;
-            patch) PA=$((PA+1)) ;;
+            cur="${tag#${prefix}-v}"
+            IFS=. read -r ma mi pa <<< "$cur"
+
+            case "$BUMP" in
+              MAJOR) ma=$((ma+1)); mi=0; pa=0 ;;
+              MINOR) mi=$((mi+1)); pa=0       ;;
+              PATCH|*) pa=$((pa+1))           ;;
+            esac
+
+            echo "${prefix}-v${ma}.${mi}.${pa}"
+          }
+
+          FRONT_NEXT=""
+          BACK_NEXT=""
+
+          case "$CHANGED" in
+            fend)
+              FRONT_NEXT="$(bump_one frontend)"
+              ;;
+            bend)
+              BACK_NEXT="$(bump_one backend)"
+              ;;
+            fendbend)
+              FRONT_NEXT="$(bump_one frontend)"
+              BACK_NEXT="$(bump_one backend)"
+              ;;
+            *)
+              echo "No relevant component changes; nothing to compute."
+              ;;
           esac
 
-          NEXT="v${MA}.${MI}.${PA}"
-          echo "Next version: $NEXT"
+          echo "frontend_next=$FRONT_NEXT" >> $GITHUB_OUTPUT
+          echo "backend_next=$BACK_NEXT"   >> $GITHUB_OUTPUT
 
-          if git rev-parse -q --verify "refs/tags/$NEXT" >/dev/null; then
-            echo "next=$NEXT" >> $GITHUB_OUTPUT
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "next=$NEXT" >> $GITHUB_OUTPUT
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
+          echo "Computed -> frontend_next='${FRONT_NEXT:-}' backend_next='${BACK_NEXT:-}'"
 
-      - name: Create and push tag
-        if: steps.version.outputs.next != '' && steps.version.outputs.exists == 'false'
+  # 10 Patch → Minor, 10 Minor → Major
+  version_rules:
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.run_attempt == 1
+    runs-on: ubuntu-latest
+    needs: [compute_versions]
+    outputs:
+      frontend_final: ${{ steps.adjust.outputs.frontend_final }}
+      backend_final:  ${{ steps.adjust.outputs.backend_final }}
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply cumulative rules (10×PATCH → MINOR, 10×MINOR → MAJOR)
+        id: adjust
+        shell: bash
         run: |
           set -euo pipefail
-          git config user.name "github-actions"
+          CHANGED="${{ needs.compute_versions.outputs.changed }}"
+          F_NEXT="${{ needs.compute_versions.outputs.frontend_next }}"
+          B_NEXT="${{ needs.compute_versions.outputs.backend_next }}"
+
+          promote_rules () {
+            local tag="$1"
+            local prefix="${tag%%-v*}"
+            local ver="${tag#${prefix}-v}"
+            IFS=. read -r ma mi pa <<< "$ver"
+
+            if [[ "$pa" -eq 10 ]]; then
+              mi=$((mi+1)); pa=0
+            fi
+
+            if [[ "$mi" -eq 10 ]]; then
+              ma=$((ma+1)); mi=0; pa=0
+            fi
+
+            echo "${prefix}-v${ma}.${mi}.${pa}"
+          }
+
+          FRONT_FINAL=""
+          BACK_FINAL=""
+
+          case "$CHANGED" in
+            fend)
+              FRONT_FINAL="$(promote_rules "$F_NEXT")"
+              ;;
+            bend)
+              BACK_FINAL="$(promote_rules "$B_NEXT")"
+              ;;
+            fendbend)
+              FRONT_FINAL="$(promote_rules "$F_NEXT")"
+              BACK_FINAL="$(promote_rules "$B_NEXT")"
+              ;;
+          esac
+
+          echo "frontend_final=$FRONT_FINAL" >> $GITHUB_OUTPUT
+          echo "backend_final=$BACK_FINAL"   >> $GITHUB_OUTPUT
+
+          echo "Final after rules -> frontend='${FRONT_FINAL:-}' backend='${BACK_FINAL:-}'"
+
+  create_and_push_tags:
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.run_attempt == 1
+    runs-on: ubuntu-latest
+    needs: [version_rules]
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create & push final tag(s)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          F_TAG="${{ needs.version_rules.outputs.frontend_final }}"
+          B_TAG="${{ needs.version_rules.outputs.backend_final }}"
+
+          if [[ -z "${F_TAG}" && -z "${B_TAG}" ]]; then
+            echo "No final tags to create. Exiting."
+            exit 0
+          fi
+
+          git config user.name  "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
 
-          git tag -a "${{ steps.version.outputs.next }}" -m "Release ${{ steps.version.outputs.next }} (via CI)"
-          git push origin "${{ steps.version.outputs.next }}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if [[ -n "${F_TAG}" ]]; then
+            echo "Creating tag: ${F_TAG}"
+            git tag -a "${F_TAG}" -m "Frontend release via PR #${{ github.event.pull_request.number }}"
+          fi
 
-      # - name: Create GitHub Release
-      #   if: steps.version.outputs.next != '' && steps.version.outputs.exists == 'false'
-      #   run: gh release create "${{ steps.version.outputs.next }}" --generate-notes
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if [[ -n "${B_TAG}" ]]; then
+            echo "Creating tag: ${B_TAG}"
+            git tag -a "${B_TAG}" -m "Backend release via PR #${{ github.event.pull_request.number }}"
+          fi
+
+          echo "Pushing tags..."
+          git push --tags
