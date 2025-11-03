@@ -4,7 +4,9 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, edited, ready_for_review, labeled, unlabeled]
   issue_comment:
-    types: [created]
+    types: [created, edited]
+  issues:
+    types: [labeled, unlabeled]
 
 permissions:
   contents: read
@@ -12,44 +14,35 @@ permissions:
   issues: write
 
 jobs:
+  # 1) SemVer label kontrolü (çokluya izin var)
   check-label:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: SemVer Label Check (allow multiple)
+      - name: SemVer Label Check
         uses: actions/github-script@v7
         with:
           script: |
             const pr = context.payload.pull_request;
-            const names = (pr.labels || []).map(l => l.name);
-
-            // Senin setine göre SemVer etkili label'lar
-            const semverLabels = new Set([
-              "breaking change","feature",           // MAJOR/MINOR
-              "fix","perf","refactor","docs","test","build","ci","deps","revert","security" // PATCH
+            const labels = (pr.labels || []).map(l => l.name);
+            const semverSet = new Set([
+              "breaking change","feature",
+              "fix","perf","refactor","docs","test","build","ci","deps","revert","security"
             ]);
 
-            const found = names.filter(n => semverLabels.has(n));
-
+            const found = labels.filter(l => semverSet.has(l));
             if (found.length < 1) {
-              core.setFailed(
-                "At least one SemVer-impact label is required. " +
-                "Allowed: breaking change, feature, fix, perf, refactor, docs, test, build, ci, deps, revert, security"
-              );
+              core.setFailed("At least one SemVer-impact label is required.");
               return;
             }
-
             core.info("SemVer labels present: " + found.join(", "));
-            // Not: birden çok olmasına izin var; burada fail etmiyoruz.
 
-  multi-label-approval:
-    if: >
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '/approve-label')
+  # 2) Onay mekanizması (sadece /approve-label yorumu geldiğinde devreye girer)
+  handle-approval-command:
+    if: github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/approve-label')
     runs-on: ubuntu-latest
     steps:
-      - name: Multi-approver label approval
+      - name: Process approval command
         uses: actions/github-script@v7
         with:
           script: |
@@ -64,60 +57,45 @@ jobs:
             if (!APPROVERS.includes(user)) {
               await github.rest.issues.createComment({
                 owner, repo, issue_number: number,
-                body: `@${user} is not authorized to approve labels.`
+                body: `@${user} is not authorized to approve merges.`
               });
               return;
             }
 
-            // Bu kullanıcının approval etiketi
-            const approvedTag = `approved-by:${user}`;
-
-            // Mevcut label'ları çek
+            // Bu kişinin onayı kaydediliyor (geçici listeyi issue body’ye gömmek yerine labels üzerinden kontrol)
             const currentLabels = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number }))
               .data.map(l => l.name);
 
-            // Aynı kullanıcı tekrar onaylamışsa yeni etiket eklemeye gerek yok
-            if (!currentLabels.includes(approvedTag)) {
-              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [approvedTag] });
+            // Approval tekrarlandığında labels:approved sıfırlanır, sonra yeniden eklenir.
+            if (currentLabels.includes("labels:approved")) {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name: "labels:approved" }).catch(()=>{});
             }
 
-            // Güncel onay sayısını hesapla
-            const updated = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number }))
-              .data.map(l => l.name);
+            // Yorum bırak
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: number,
+              body: `Approval registered from @${user}.`
+            });
 
-            const uniqueApprovers = Array.from(
-              new Set(
-                updated.filter(n => n.startsWith("approved-by:")).map(n => n.replace("approved-by:", ""))
-              )
+            // Onaylayanları topla (en son 10 yorumu çekip sayabiliriz)
+            const comments = await github.rest.issues.listComments({ owner, repo, issue_number: number, per_page: 50 });
+            const approvers = new Set(
+              comments.data
+                .filter(c => c.body?.trim().startsWith("/approve-label"))
+                .map(c => c.user.login)
+                .filter(u => APPROVERS.includes(u))
             );
 
-            if (uniqueApprovers.length >= REQUIRED_APPROVALS) {
-              if (!updated.includes("labels:approved")) {
-                await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: ["labels:approved"] });
-                await github.rest.issues.createComment({
-                  owner, repo, issue_number: number,
-                  body: `Merge approval granted by ${uniqueApprovers.map(u => "@" + u).join(", ")}`
-                });
-              }
+            if (approvers.size >= REQUIRED_APPROVALS) {
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: number,
+                labels: ["labels:approved"]
+              });
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: number,
+                body: `labels:approved added — approvals: ${[...approvers].map(u=>"@"+u).join(", ")}`
+              });
             } else {
               await github.rest.issues.createComment({
                 owner, repo, issue_number: number,
-                body: `${uniqueApprovers.length}/${REQUIRED_APPROVALS} approvals recorded.`
-              });
-            }
-
-  approval-guard:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require labels:approved before merge
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const pr = context.payload.pull_request;
-            const labels = (pr.labels || []).map(l => l.name);
-            if (!labels.includes("labels:approved")) {
-              core.setFailed("labels:approved is required to merge this PR.");
-            } else {
-              core.info("labels:approved present.");
-            }
+                body: `${approvers.size}/${REQUIRE
