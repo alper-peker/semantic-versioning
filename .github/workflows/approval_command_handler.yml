@@ -5,9 +5,10 @@ on:
     types: [created]
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
   issues: write
+  actions: write
 
 env:
   APPROVAL_USERS: 'AlperPeker, alper-peker'
@@ -63,10 +64,14 @@ jobs:
                 body: `labels:approved added. Approvals: ${[...approvers].map(a => "@" + a).join(", ")}`
               });
 
-              await github.rest.repos.createDispatchEvent({
-                owner, repo,
-                event_type: "labels_approved",
-                client_payload: { pr_number: number }
+              const pr = await github.rest.pulls.get({ owner, repo, pull_number: number });
+
+              await github.rest.actions.createWorkflowDispatch({
+                owner,
+                repo,
+                workflow_id: "label_enforcement.yml",   // bu dosyanın adı
+                ref: pr.data.head.ref,                   // PR'ın head branch'i
+                inputs: { pr_number: String(number) }
               });
             } else {
               const pending = APPROVERS.filter(a => !approvers.has(a));
