@@ -8,3 +8,5 @@ Tag Requests:
  .
  X. Race-condition with another branch: SUCCEED!
  x.1 MINOR SHOWCASE
+
+ - Plain test for label and merge rulesets.
