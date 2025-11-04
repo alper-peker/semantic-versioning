@@ -37,7 +37,6 @@ jobs:
             }
             core.info("SemVer labels present: " + found.join(", "));
 
-  # 2) Onay mekanizması (sadece /approve-label yorumu geldiğinde devreye girer)
   handle-approval-command:
     if: github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/approve-label')
     runs-on: ubuntu-latest
@@ -62,22 +61,18 @@ jobs:
               return;
             }
 
-            // Bu kişinin onayı kaydediliyor (geçici listeyi issue body’ye gömmek yerine labels üzerinden kontrol)
             const currentLabels = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number }))
               .data.map(l => l.name);
 
-            // Approval tekrarlandığında labels:approved sıfırlanır, sonra yeniden eklenir.
             if (currentLabels.includes("labels:approved")) {
               await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name: "labels:approved" }).catch(()=>{});
             }
 
-            // Yorum bırak
             await github.rest.issues.createComment({
               owner, repo, issue_number: number,
               body: `Approval registered from @${user}.`
             });
 
-            // Onaylayanları topla (en son 10 yorumu çekip sayabiliriz)
             const comments = await github.rest.issues.listComments({ owner, repo, issue_number: number, per_page: 50 });
             const approvers = new Set(
               comments.data
