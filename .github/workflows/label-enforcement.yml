@@ -3,21 +3,16 @@ name: Label Enforcement
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, ready_for_review, labeled, unlabeled]
-  issue_comment:
-    types: [created]
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
-
 env:
-  REQUIRED_APPROVALS: 2
   APPROVAL_USERS: 'AlperPeker, alper-peker'
 
 jobs:
-  check-label:
-    if: github.event_name == 'pull_request'
+  label-check:
     runs-on: ubuntu-latest
     steps:
       - name: Require approvals and SemVer labels
@@ -27,97 +22,59 @@ jobs:
             const { owner, repo } = context.repo;
             const number = context.payload.pull_request.number;
 
-            const list = await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number });
-            const labels = list.data.map(l => l.name);
+            async function getLabels() {
+              const res = await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number });
+              return res.data.map(l => l.name);
+            }
 
-            const approvalUsers = process.env.APPROVAL_USERS;
+            async function waitForApproved(maxTries = 6) {
+              for (let i = 0; i < maxTries; i++) {
+                const labels = await getLabels();
+                if (labels.includes("labels:approved")) return labels;
+                await new Promise(r => setTimeout(r, 1000));
+              }
+              return await getLabels();
+            }
+
+            const approvers = process.env.APPROVAL_USERS.split(',').map(s => s.trim());
+            const labels = await waitForApproved();
+
             if (!labels.includes("labels:approved")) {
-              core.setFailed(`Your labels must be approved by: ${approvalUsers} to merge into main.`);
+              const comments = await github.rest.issues.listComments({ owner, repo, issue_number: number, per_page: 100 });
+              const approvedBy = new Set(
+                comments.data
+                  .filter(c => c.body?.trim().startsWith("/approve-label"))
+                  .map(c => c.user.login)
+                  .filter(u => approvers.includes(u))
+              );
+              const pending = approvers.filter(u => !approvedBy.has(u));
+
+              core.warning(`Pending approvals: ${pending.length ? pending.join(', ') : 'none'}`);
+
+              const recent = comments.data.slice(-10).some(c =>
+                (c.body || '').includes('Pending approvals:') &&
+                pending.every(u => (c.body || '').includes(`@${u}`))
+              );
+              if (!recent) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: number,
+                  body: `Pending approvals: ${pending.length ? pending.map(u => `@${u}`).join(', ') : 'none'}`
+                });
+              }
+
+              core.setFailed(`Your labels must be approved by: ${approvers.join(', ')} to merge into main.`);
               return;
             }
 
-            const semverSet = new Set([
+            const semver = new Set([
               "breaking change","feature",
               "fix","perf","refactor","docs","test","build","ci","deps","revert","security"
             ]);
-            const found = labels.filter(l => semverSet.has(l));
+            const found = labels.filter(l => semver.has(l));
 
             if (found.length < 1) {
               core.setFailed("At least one SemVer-impact label is required: breaking change, feature, fix, perf, refactor, docs, test, build, ci, deps, revert, security.");
               return;
             }
 
-            core.info("Approved and SemVer labels present. Merge allowed by this check.");
-
-  approval-command:
-    if: github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/approve-label')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Process /approve-label
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const owner  = context.repo.owner;
-            const repo   = context.repo.repo;
-            const number = context.payload.issue.number;
-
-            const user = context.payload.comment.user.login;
-            const required = parseInt(process.env.REQUIRED_APPROVALS || "2", 10);
-            const APPROVERS = process.env.APPROVAL_USERS.split(",").map(s => s.trim());
-
-            if (!APPROVERS.includes(user)) {
-              await github.rest.issues.createComment({
-                owner, repo, issue_number: number,
-                body: `@${user} is not authorized to approve. Allowed approvers: ${APPROVERS.join(", ")}`
-              });
-              return;
-            }
-
-            const comments = await github.rest.issues.listComments({ owner, repo, issue_number: number, per_page: 100 });
-            const approvers = new Set(
-              comments.data
-                .filter(c => c.body?.trim().startsWith("/approve-label"))
-                .map(c => c.user.login)
-                .filter(u => APPROVERS.includes(u))
-            );
-
-            const labelsNow = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number })).data.map(l => l.name);
-            if (labelsNow.includes("labels:approved")) {
-              await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name: "labels:approved" }).catch(()=>{});
-            }
-
-            if (approvers.size >= required) {
-              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: ["labels:approved"] });
-              await github.rest.issues.createComment({
-                owner, repo, issue_number: number,
-                body: `labels:approved added. Approvals: ${[...approvers].map(u => "@"+u).join(", ")}`
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner, repo, issue_number: number,
-                body: `${approvers.size}/${required} approvals recorded. Waiting for: ${APPROVERS.filter(u => !approvers.has(u)).map(u=>"@"+u).join(", ")}`
-              });
-            }
-
-  approved-label-guard:
-    if: github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'labels:approved'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Guard labels:approved source
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const owner  = context.repo.owner;
-            const repo   = context.repo.repo;
-            const number = context.payload.pull_request.number;
-            const actor  = context.actor; // label'ı ekleyen kullanıcı
-
-            const APPROVERS = process.env.APPROVAL_USERS.split(",").map(s => s.trim());
-
-            if (!APPROVERS.includes(actor)) {
-              await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name: "labels:approved" }).catch(()=>{});
-              await github.rest.issues.createComment({
-                owner, repo, issue_number: number,
-                body: `labels:approved can only be set via /approve-label by: ${APPROVERS.join(", ")}`
-              });
-            }
+            core.info(`labels:approved present; SemVer labels: ${found.join(', ')}`);
