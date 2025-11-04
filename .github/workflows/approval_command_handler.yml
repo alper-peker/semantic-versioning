@@ -5,7 +5,7 @@ on:
     types: [created]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
   issues: write
 
@@ -48,7 +48,6 @@ jobs:
             const labelsNow = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number }))
               .data.map(l => l.name);
 
-            // Her çağrıda önce eski 'labels:approved' varsa kaldır
             if (labelsNow.includes("labels:approved")) {
               await github.rest.issues.removeLabel({
                 owner, repo, issue_number: number, name: "labels:approved"
@@ -62,6 +61,12 @@ jobs:
               await github.rest.issues.createComment({
                 owner, repo, issue_number: number,
                 body: `labels:approved added. Approvals: ${[...approvers].map(a => "@" + a).join(", ")}`
+              });
+
+              await github.rest.repos.createDispatchEvent({
+                owner, repo,
+                event_type: "labels_approved",
+                client_payload: { pr_number: number }
               });
             } else {
               const pending = APPROVERS.filter(a => !approvers.has(a));
