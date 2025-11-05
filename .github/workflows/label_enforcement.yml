@@ -48,7 +48,7 @@ jobs:
 
             let labels = await getLabels();
 
-            if (!labels.includes("labels:approved")) {
+            if (!labels.includes("approved")) {
               const comments = await github.rest.issues.listComments({ owner, repo, issue_number: number, per_page: 100 });
               const approvedBy = new Set(
                 comments.data
@@ -86,4 +86,4 @@ jobs:
               return;
             }
 
-            core.info(`labels:approved present; SemVer labels: ${found.join(', ')}`);
+            core.info(`approved present; SemVer labels: ${found.join(', ')}`);
