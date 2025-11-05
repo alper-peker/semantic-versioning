@@ -3,6 +3,8 @@ name: Label Enforcement
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, ready_for_review, labeled, unlabeled]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -27,12 +29,19 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
 
-            const number =
-              context.eventName === "pull_request"
-                ? context.payload.pull_request.number
-                : context.eventName === "workflow_dispatch"
-                  ? Number(core.getInput('pr_number'))
-                  : null;
+            let number;
+            if (context.eventName === "pull_request") {
+              number = context.payload.pull_request.number;
+            } else if (context.eventName === "workflow_dispatch") {
+              number = Number(core.getInput('pr_number'));
+            } else if (context.eventName === "issue_comment") {
+              if (context.payload.issue.pull_request) {
+                number = context.payload.issue.number;
+              } else {
+                core.info("Comment is on an issue, not a PR. Skipping.");
+                return;
+              }
+            }
 
             if (!number) {
               core.setFailed("PR number not found in event payload.");
@@ -44,18 +53,10 @@ jobs:
               return res.data.map(l => l.name);
             }
 
-            async function waitForApproved(maxTries = 6) {
-              for (let i = 0; i < maxTries; i++) {
-                const labels = await getLabels();
-                if (labels.includes("labels:approved")) return labels;
-                await new Promise(r => setTimeout(r, 1000));
-              }
-              return await getLabels();
-            }
-
             const approvers = process.env.APPROVAL_USERS.split(',').map(s => s.trim());
 
             let labels = await getLabels();
+            
             if (!labels.includes("labels:approved")) {
               const comments = await github.rest.issues.listComments({ owner, repo, issue_number: number, per_page: 100 });
               const approvedBy = new Set(
@@ -81,8 +82,6 @@ jobs:
               core.setFailed(`Your labels must be approved by: ${approvers.join(', ')} to merge into main.`);
               return;
             }
-
-            labels = await waitForApproved();
 
             const semver = new Set([
               "breaking change","feature",
