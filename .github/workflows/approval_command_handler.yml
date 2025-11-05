@@ -21,6 +21,7 @@ jobs:
     steps:
       - name: Process /approve-label
         uses: actions/github-script@v7
+        token: ${{ secrets.WORKFLOW_PAT }}
         with:
           script: |
             const { owner, repo } = context.repo;
