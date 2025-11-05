@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
   issues: write
   actions: write
 
@@ -65,16 +65,39 @@ jobs:
                 owner, repo, issue_number: number,
                 body: `labels:approved added. Approvals: ${[...approvers].map(a => "@" + a).join(", ")}`
               });
-
+              
               const pr = await github.rest.pulls.get({ owner, repo, pull_number: number });
+              const headSha = pr.data.head.sha;
+              core.info(`PR head sha: ${headSha}`);
 
-              await github.rest.actions.createWorkflowDispatch({
+              const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
                 owner,
                 repo,
-                workflow_id: "label_enforcement.yml",   // bu dosyanın adı
-                ref: pr.data.head.ref,                   // PR'ın head branch'i
-                inputs: { pr_number: String(number) }
+                workflow_id: "label_enforcement.yml",
+                event: "pull_request",
+                head_sha: headSha,
+                status: "failure",
+                per_page: 1
               });
+
+              if (runs.workflow_runs.length > 0) {
+                const run_id = runs.workflow_runs[0].id;
+                core.info(`Found failed 'label_enforcement.yml' run ID: ${run_id}. Triggering re-run...`);
+
+                await github.rest.actions.reRunWorkflowFailedJobs({
+                  owner,
+                  repo,
+                  run_id: run_id
+                });
+                
+                await github.rest.issues.createComment({
+                   owner, repo, issue_number: number,
+                   body: `Approvals complete. Re-running the failed 'label-check' job.`
+                });
+              } else {
+                core.warning("Could not find a previously failed 'label_enforcement.yml' run to re-run.");
+              }
+
             } else {
               const pending = APPROVERS.filter(a => !approvers.has(a));
               await github.rest.issues.createComment({
@@ -82,4 +105,3 @@ jobs:
                 body: `${approvers.size}/${REQUIRED} approvals recorded. Pending: ${pending.map(a => "@" + a).join(", ")}`
               });
             }
-              
