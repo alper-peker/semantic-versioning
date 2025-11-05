@@ -52,27 +52,25 @@ jobs:
             const labelsNow = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number }))
               .data.map(l => l.name);
 
-            if (labelsNow.includes("labels:approved")) {
+            if (labelsNow.includes("approved")) {
               await github.rest.issues.removeLabel({
-                owner, repo, issue_number: number, name: "labels:approved"
+                owner, repo, issue_number: number, name: "approved"
               }).catch(() => {});
             }
 
             if (approvers.size >= REQUIRED) {
               await github.rest.issues.addLabels({
-                owner, repo, issue_number: number, labels: ["labels:approved"]
+                owner, repo, issue_number: number, labels: ["approved"]
               });
               await github.rest.issues.createComment({
                 owner, repo, issue_number: number,
-                body: `labels:approved added. Approvals: ${[...approvers].map(a => "@" + a).join(", ")}`
+                body: `approved added. Approvals: ${[...approvers].map(a => "@" + a).join(", ")}`
               });
 
-              // PR'ın 'head' commit SHA'sını al
               const pr = await github.rest.pulls.get({ owner, repo, pull_number: number });
               const headSha = pr.data.head.sha;
               core.info(`PR head sha: ${headSha}`);
 
-              // Bu SHA'ya bağlı başarısız 'label_enforcement.yml' run'ını bul
               const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
                 owner,
                 repo,
@@ -87,7 +85,6 @@ jobs:
                 const run_id = runs.workflow_runs[0].id;
                 core.info(`Found failed 'label_enforcement.yml' run ID: ${run_id}. Triggering re-run...`);
 
-                // Bulunan run'ın BAŞARISIZ olan job'larını yeniden çalıştır
                 await github.rest.actions.reRunWorkflowFailedJobs({
                   owner,
                   repo,
