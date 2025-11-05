@@ -44,18 +44,10 @@ jobs:
               return res.data.map(l => l.name);
             }
 
-            async function waitForApproved(maxTries = 6) {
-              for (let i = 0; i < maxTries; i++) {
-                const labels = await getLabels();
-                if (labels.includes("labels:approved")) return labels;
-                await new Promise(r => setTimeout(r, 1000));
-              }
-              return await getLabels();
-            }
-
             const approvers = process.env.APPROVAL_USERS.split(',').map(s => s.trim());
 
             let labels = await getLabels();
+
             if (!labels.includes("labels:approved")) {
               const comments = await github.rest.issues.listComments({ owner, repo, issue_number: number, per_page: 100 });
               const approvedBy = new Set(
@@ -66,12 +58,13 @@ jobs:
               );
               const pending = approvers.filter(u => !approvedBy.has(u));
               core.warning(`Pending approvals: ${pending.length ? pending.join(', ') : 'none'}`);
-
+              
               const recent = comments.data.slice(-10).some(c =>
                 (c.body || '').includes('Pending approvals:') &&
                 pending.every(u => (c.body || '').includes(`@${u}`))
               );
-              if (!recent) {
+              
+              if (!recent && context.eventName !== "workflow_dispatch") {
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: number,
                   body: `Pending approvals: ${pending.length ? pending.map(u => `@${u}`).join(', ') : 'none'}`
@@ -81,8 +74,6 @@ jobs:
               core.setFailed(`Your labels must be approved by: ${approvers.join(', ')} to merge into main.`);
               return;
             }
-
-            labels = await waitForApproved();
 
             const semver = new Set([
               "breaking change","feature",
