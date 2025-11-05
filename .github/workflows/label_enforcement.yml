@@ -3,8 +3,6 @@ name: Label Enforcement
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, ready_for_review, labeled, unlabeled]
-  issue_comment:
-    types: [created]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -29,19 +27,12 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
 
-            let number;
-            if (context.eventName === "pull_request") {
-              number = context.payload.pull_request.number;
-            } else if (context.eventName === "workflow_dispatch") {
-              number = Number(core.getInput('pr_number'));
-            } else if (context.eventName === "issue_comment") {
-              if (context.payload.issue.pull_request) {
-                number = context.payload.issue.number;
-              } else {
-                core.info("Comment is on an issue, not a PR. Skipping.");
-                return;
-              }
-            }
+            const number =
+              context.eventName === "pull_request"
+                ? context.payload.pull_request.number
+                : context.eventName === "workflow_dispatch"
+                  ? Number(core.getInput('pr_number'))
+                  : null;
 
             if (!number) {
               core.setFailed("PR number not found in event payload.");
@@ -56,7 +47,7 @@ jobs:
             const approvers = process.env.APPROVAL_USERS.split(',').map(s => s.trim());
 
             let labels = await getLabels();
-            
+
             if (!labels.includes("labels:approved")) {
               const comments = await github.rest.issues.listComments({ owner, repo, issue_number: number, per_page: 100 });
               const approvedBy = new Set(
@@ -67,12 +58,13 @@ jobs:
               );
               const pending = approvers.filter(u => !approvedBy.has(u));
               core.warning(`Pending approvals: ${pending.length ? pending.join(', ') : 'none'}`);
-
+              
               const recent = comments.data.slice(-10).some(c =>
                 (c.body || '').includes('Pending approvals:') &&
                 pending.every(u => (c.body || '').includes(`@${u}`))
               );
-              if (!recent) {
+              
+              if (!recent && context.eventName !== "workflow_dispatch") {
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: number,
                   body: `Pending approvals: ${pending.length ? pending.map(u => `@${u}`).join(', ') : 'none'}`
