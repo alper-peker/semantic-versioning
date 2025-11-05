@@ -1,3 +1,4 @@
 console.log("Testing the label approval for main branch 2")
 console.log("Testing the label approval for main branch 4")
 console.log("Testing the label approval for main branch 6")
+console.log("Testing the label approval for main branch 10")
