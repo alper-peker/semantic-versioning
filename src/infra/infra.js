@@ -1,0 +1,1 @@
+console.log("Testing the label tagging for infra module")
