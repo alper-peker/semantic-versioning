@@ -1,0 +1,108 @@
+name: AI PR Labeler
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ai_label_suggestion:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Get PR Diff
+        id: pr_data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          DIFF=$(gh pr diff $PR_NUMBER --repo $REPO | head -c 3000)
+          
+          echo "PR_DIFF<<EOF" >> $GITHUB_ENV
+          echo "$DIFF" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Read Labels JSON
+        id: read_labels
+        run: |
+          if [ -f scripts/labels.json ]; then
+            LABELS_CONTENT=$(cat scripts/labels.json | jq -c .)
+          else
+            echo "Error: scripts/labels.json file not found!"
+            exit 1
+          fi
+          echo "LABELS=$LABELS_CONTENT" >> $GITHUB_ENV
+
+      - name: Analyze with OpenAI
+        id: openai_analysis
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_LABEL }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          PROMPT="You are a strict code classifier. analyze the following Pull Request and select the SINGLE most appropriate label from the provided JSON list.
+
+          Available Labels (JSON):
+          $LABELS
+          
+          PR Title: $PR_TITLE
+          PR Body: $PR_BODY
+          
+          PR Diff (Summary):
+          $PR_DIFF
+          
+          Constraints:
+          1. Return ONLY the label name.
+          2. Do not explain your reasoning.
+          3. Do not use markdown formatting, quotes, or punctuation.
+          4. If multiple apply, pick the most dominant one."
+
+          PAYLOAD=$(jq -n \
+            --arg model "gpt-4o-mini" \
+            --arg system "You are a helper bot that classifies pull requests." \
+            --arg user "$PROMPT" \
+            '{
+              model: $model,
+              messages: [
+                {role: "system", content: $system},
+                {role: "user", content: $user}
+              ],
+              temperature: 0.1
+            }')
+
+          RESPONSE=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -d "$PAYLOAD")
+
+          if echo "$RESPONSE" | jq -e '.error' > /dev/null; then
+            echo "OpenAI API Error: $(echo $RESPONSE | jq -r '.error.message')"
+            exit 1
+          fi
+
+          SUGGESTION=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+          
+          echo "suggestion=$SUGGESTION" >> $GITHUB_OUTPUT
+
+      - name: Comment on PR
+        uses: actions/github-script@v6
+        if: success()
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const label = process.env.SUGGESTION;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `🤖 **AI Label Recommendation**\n\nSuggested Label: \`${label}\``
+            });
+        env:
+          SUGGESTION: ${{ steps.openai_analysis.outputs.suggestion }}
