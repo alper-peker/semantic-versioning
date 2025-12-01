@@ -303,10 +303,10 @@ jobs:
             local diff_output=""
             if [[ -n "$prev_tag" ]]; then
               echo "Generating diff between $prev_tag and $tag..."
-              diff_output=$(git diff "$prev_tag" "$tag" | head -c 3000)
+              diff_output=$(git diff "$prev_tag" "$tag" | head -c 3000 || true)
             else
               echo "No previous release found. Using empty diff or initial commit diff."
-              diff_output=$(gh pr diff $PR_NUMBER --repo $REPO | head -c 3000)
+              diff_output=$(gh pr diff $PR_NUMBER --repo $REPO | head -c 3000 || true)
             fi
 
 
