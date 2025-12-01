@@ -2,7 +2,7 @@ name: AI PR Labeler
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, reopened]
 
 permissions:
   contents: read
@@ -23,7 +23,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           DIFF=$(gh pr diff $PR_NUMBER --repo $REPO | head -c 3000)
-          
+
           echo "PR_DIFF<<EOF" >> $GITHUB_ENV
           echo "$DIFF" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
@@ -46,22 +46,26 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          PROMPT="You are a strict code classifier. analyze the following Pull Request and select the SINGLE most appropriate label from the provided JSON list.
+          PROMPT="You are a strict code classifier. Analyze the following Pull Request and select the SINGLE most appropriate label from the provided JSON list.
 
           Available Labels (JSON):
           $LABELS
-          
+
           PR Title: $PR_TITLE
           PR Body: $PR_BODY
-          
+
           PR Diff (Summary):
           $PR_DIFF
-          
+
           Constraints:
           1. Return ONLY the label name.
           2. Do not explain your reasoning.
           3. Do not use markdown formatting, quotes, or punctuation.
-          4. If multiple apply, pick the most dominant one."
+          4. If multiple apply, pick the most dominant one.
+          5. Do NOT default to 'feature' unless it is clearly a new functionality.
+          6. Consider 'fix', 'ci', 'docs', 'refactor', 'style', 'test' carefully.
+          7. If the change is a bug fix, prioritize 'fix'.
+          8. If the change is a breaking change, prioritize 'breaking-change'."
 
           PAYLOAD=$(jq -n \
             --arg model "gpt-4o-mini" \
@@ -87,7 +91,7 @@ jobs:
           fi
 
           SUGGESTION=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
-          
+
           echo "suggestion=$SUGGESTION" >> $GITHUB_OUTPUT
 
       - name: Comment on PR
@@ -97,7 +101,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const label = process.env.SUGGESTION;
-            
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
