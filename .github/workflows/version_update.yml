@@ -282,27 +282,62 @@ jobs:
 
             echo "Processing release for $component ($tag)..."
 
-            DIFF=$(gh pr diff $PR_NUMBER --repo $REPO | head -c 3000)
+            git fetch --tags --force
+
+            echo "Finding last release for $component..."
+            
+            local prev_tag=""
+            local release_tags
+            release_tags=$(gh release list --limit 100 --json tagName --jq ".[].tagName" | grep "^${component}-v" || true)
+            
+            for t in $release_tags; do
+              if [[ "$t" != "$tag" ]]; then
+                prev_tag="$t"
+                break
+              fi
+            done
+
+            echo "Current tag: $tag"
+            echo "Previous release tag: ${prev_tag:-none}"
+
+            local diff_output=""
+            if [[ -n "$prev_tag" ]]; then
+              echo "Generating diff between $prev_tag and $tag..."
+              diff_output=$(git diff "$prev_tag" "$tag" | head -c 3000)
+            else
+              echo "No previous release found. Using empty diff or initial commit diff."
+              diff_output=$(gh pr diff $PR_NUMBER --repo $REPO | head -c 3000)
+            fi
+
 
             PROMPT="You are a technical writer. Generate a release note for a major version release of the '$component' component.
             
             Context:
             - Component: $component
             - Version: $tag
+            - Previous Version: ${prev_tag:-none}
             - PR Title: $PR_TITLE
             - PR Body: $PR_BODY
             
-            Diff Summary:
-            $DIFF
+            Diff Summary (between previous and current version):
+            $diff_output
             
             Instructions:
-            1. Create a concise but informative release note in Markdown.
-            2. Highlight the 'Breaking Changes' based on the context.
-            3. Include a 'Changelog' section.
-            4. Do not include the raw diff or internal details unless relevant to the user.
-            5. Start with a header: '# Release $tag'"
+            Generate the release notes using EXACTLY the following format:
+            
+            Title: Release $tag
+            This release is created to provide the $tag for the $component.
+            
+            [Breaking Changes Section]: Describe the breaking changes in a human-readable manner using full sentences.
+            
+            Changes:
+            - [List new features and functionalities added since the last release]
+            
+            Fixes:
+            - [List bugs or problems fixed since the last release]
+            
+            Do not include raw diffs. Ensure the tone is professional."
 
-            # Call OpenAI
             PAYLOAD=$(jq -n \
               --arg model "gpt-4o-mini" \
               --arg system "You are a helpful assistant that generates release notes." \
@@ -323,14 +358,11 @@ jobs:
 
             if echo "$RESPONSE" | jq -e '.error' > /dev/null; then
               echo "OpenAI API Error: $(echo $RESPONSE | jq -r '.error.message')"
-              # Fallback to simple notes if AI fails
               NOTES="Major release for $component. See PR #$PR_NUMBER for details."
             else
               NOTES=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
             fi
 
-            # Create Release
-            # Title format: $CHANGED_COMPONENT-$VERSION_TAG (which is effectively the tag name)
             TITLE="$tag"
             
             echo "Creating GitHub Release for $tag..."
@@ -340,7 +372,6 @@ jobs:
               --repo "$REPO"
           }
 
-          # Process each component
           create_release "$FRONT_TAG" "frontend"
           create_release "$BACK_TAG" "backend"
           create_release "$FUNCS_TAG" "functions"
