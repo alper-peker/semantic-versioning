@@ -2,11 +2,20 @@ name: Label Enforcement
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited, ready_for_review, labeled, unlabeled]
+    types:
+      [
+        opened,
+        synchronize,
+        reopened,
+        edited,
+        ready_for_review,
+        labeled,
+        unlabeled,
+      ]
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'PR number to check'
+        description: "PR number to check"
         required: true
 
 permissions:
@@ -15,7 +24,7 @@ permissions:
   issues: write
 
 env:
-  APPROVAL_USERS: 'AlperPeker, alper-peker'
+  APPROVAL_USERS: "AlperPeker, alper-peker"
 
 jobs:
   label-check:
@@ -76,7 +85,7 @@ jobs:
             }
 
             const semver = new Set([
-              "breaking change","feature",
+              "breaking-change","feature",
               "fix","perf","refactor","docs","test","build","ci","deps","revert","security"
             ]);
             const found = labels.filter(l => semver.has(l));
