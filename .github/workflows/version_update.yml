@@ -35,7 +35,7 @@ jobs:
           set -euo pipefail
 
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          # merge_commit_sha genelde mevcut, yoksa head.sha'ya düş
+
           HEAD_SHA="${{ github.event.pull_request.merge_commit_sha || github.event.pull_request.head.sha }}"
 
           echo "Base: ${BASE_SHA}"
@@ -67,7 +67,6 @@ jobs:
             const labels = (context.payload.pull_request.labels || []).map(l => l.name);
             core.info(`PR labels: ${labels.join(', ') || '(none)'}`);
 
-            // Varsayılan bump: patch
             let bump = 'patch';
 
             if (labels.includes('breaking-change')) {
@@ -118,16 +117,13 @@ jobs:
             local prefix="$1"
             local pattern="${prefix}-v*"
 
-            # Son tag'i bul
             local last
             last=$(git tag --list "$pattern" | sort -V | tail -n 1 || true)
 
             local base
             if [[ -z "$last" ]]; then
-              # Hiç tag yoksa 0.0.0'dan başla
               base="0.0.0"
             else
-              # Örn: frontend-v1.2.3 -> 1.2.3
               base="${last#${prefix}-v}"
             fi
 
@@ -157,7 +153,6 @@ jobs:
           FUNCS_NEXT=""
           INFRA_NEXT=""
 
-          # CHANGED string'i: "fend,bend,func,infra" gibi
           if [[ ",$CHANGED," == *",fend,"* ]]; then
             FRONT_NEXT="$(bump_one "frontend")"
           fi
