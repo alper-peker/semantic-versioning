@@ -11,8 +11,8 @@ permissions:
   actions: write
 
 env:
-  APPROVAL_USERS: 'AlperPeker, alper-peker'
-  REQUIRED_APPROVALS: '2'
+  APPROVAL_USERS: "AlperPeker, alper-peker"
+  REQUIRED_APPROVALS: "2"
 
 jobs:
   handle-approval:
@@ -46,7 +46,7 @@ jobs:
                 .map(c => c.user.login)
                 .filter(u => APPROVERS.includes(u))
             );
-            
+
             approvers.add(user);
 
             const labelsNow = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number }))
@@ -106,4 +106,3 @@ jobs:
                 body: `${approvers.size}/${REQUIRED} approvals recorded. Pending: ${pending.map(a => "@" + a).join(", ")}`
               });
             }
-              
